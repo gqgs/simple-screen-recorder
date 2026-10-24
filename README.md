@@ -31,7 +31,20 @@ sudo apt install build-essential pkg-config libgstreamer1.0-dev \
 cargo build --release
 ```
 
-Use `./target/release/ssr`, or install the binary onto your PATH with
+To build and install system-wide as `/usr/local/bin/ssr` (requires Make):
+
+```sh
+make
+sudo make install
+ssr --help
+```
+
+Build as your regular user before installing. To choose a different location,
+use `make install PREFIX="$HOME/.local"` for a per-user installation, or
+`sudo make install PREFIX=/usr` for `/usr/bin/ssr`. The install target also
+supports `BINDIR` and `DESTDIR` overrides for custom layouts and package staging.
+
+Alternatively, use `./target/release/ssr` directly, or install onto your PATH with
 `cargo install --path . --locked`.
 
 ## Record
