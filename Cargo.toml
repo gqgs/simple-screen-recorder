@@ -1,0 +1,20 @@
+[package]
+name = "simple-screen-recorder"
+version = "0.1.0"
+edition = "2024"
+description = "Minimal Linux screen recorder with portal selection and export presets"
+license = "MIT"
+
+[[bin]]
+name = "ssr"
+path = "src/main.rs"
+
+[dependencies]
+anyhow = "1"
+ashpd = { version = "0.13", default-features = false, features = ["tokio", "screencast"] }
+clap = { version = "4", features = ["derive"] }
+gstreamer = "0.24"
+serde = { version = "1", features = ["derive"] }
+tempfile = "3"
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "signal", "time"] }
+toml = "0.9"

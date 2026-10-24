@@ -1,0 +1,8 @@
+width = 1920
+height = 1080
+fps = 30
+crf = 18
+maxrate_kbps = 8000
+bufsize_kbps = 16000
+encoder_preset = "slow"
+audio_kbps = 160
