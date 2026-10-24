@@ -60,6 +60,13 @@ mouse-drag overlay. Window selection uses the desktop portal, so it works with
 native Wayland windows without relying on X11 window IDs. Availability and behavior
 when a window is minimized or resized depend on the compositor.
 
+After selection, the recorder allows one second for the picker/region overlay to
+disappear. This startup interval is removed from the final video and audio;
+`--duration` counts recording time after startup. Use `--startup-delay 2` for a
+slower desktop, or `--startup-delay 0` to disable it. Wait for the `Recording.`
+message before starting your demonstration. The recovery intermediate includes
+startup frames; remove them with `ssr export ... --trim-start 1` if needed.
+
 Audio is off by default. `--audio` accepts a PulseAudio/PipeWire-Pulse source;
 `pactl list short sources` lists names. This records one audio source, not a mix of
 microphone and system audio. Use `--hide-cursor` to omit the pointer.

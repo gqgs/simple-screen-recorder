@@ -44,6 +44,9 @@ enum Action {
         /// Stop automatically after this many seconds
         #[arg(long, value_parser = clap::value_parser!(u64).range(1..))]
         duration: Option<u64>,
+        /// Discard this many initial seconds while the desktop picker disappears
+        #[arg(long, default_value_t = 1, value_parser = clap::value_parser!(u64).range(0..=60))]
+        startup_delay: u64,
         /// Do not embed the mouse pointer
         #[arg(long)]
         hide_cursor: bool,
@@ -57,6 +60,9 @@ enum Action {
     /// Export an existing recording using a preset
     Export {
         input: PathBuf,
+        /// Trim this many seconds from the beginning (also trims audio)
+        #[arg(long, default_value_t = 0)]
+        trim_start: u64,
         #[arg(short, long)]
         output: PathBuf,
         #[arg(short, long, default_value = "twitter")]
@@ -158,7 +164,7 @@ fn check_output(output: &Path, overwrite: bool) -> Result<()> {
     Ok(())
 }
 
-fn export(p: &Preset, input: &Path, output: &Path, overwrite: bool) -> Result<()> {
+fn export(p: &Preset, input: &Path, output: &Path, overwrite: bool, trim_start: u64) -> Result<()> {
     check_output(output, overwrite)?;
     let parent = output
         .parent()
@@ -168,7 +174,7 @@ fn export(p: &Preset, input: &Path, output: &Path, overwrite: bool) -> Result<()
         .prefix(".ssr-export-")
         .suffix(".mp4")
         .tempfile_in(parent)?;
-    p.export(input, staged.path())?;
+    p.export(input, staged.path(), trim_start)?;
     if overwrite {
         staged.persist(output)?;
     } else {
@@ -185,18 +191,27 @@ impl Drop for RunningPipeline {
     }
 }
 
-async fn capture(pipeline: gst::Pipeline, duration: Option<u64>) -> Result<()> {
+async fn capture(pipeline: gst::Pipeline, duration: Option<u64>, startup_delay: u64) -> Result<()> {
     let running = RunningPipeline(pipeline);
     let pipeline = &running.0;
     let bus = pipeline.bus().context("No GStreamer bus")?;
     // Register the signal handler before starting capture.
     let mut interrupt = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::interrupt())?;
     pipeline.set_state(gst::State::Playing)?;
-    eprintln!("Recording. Press Ctrl+C to stop and export.");
+    if startup_delay > 0 {
+        eprintln!(
+            "Waiting {startup_delay}s for the picker to disappear (startup frames will be discarded)…"
+        );
+    }
+    let mut announced = false;
     let start = Instant::now();
     let mut stopping: Option<Instant> = None;
     let mut tick = tokio::time::interval(Duration::from_millis(50));
     loop {
+        if !announced && start.elapsed() >= Duration::from_secs(startup_delay) {
+            eprintln!("Recording. Press Ctrl+C to stop and export.");
+            announced = true;
+        }
         tokio::select! {
             _ = interrupt.recv() => {
                 if stopping.is_none() {
@@ -207,14 +222,25 @@ async fn capture(pipeline: gst::Pipeline, duration: Option<u64>) -> Result<()> {
             }
             _ = tick.tick() => {}
         }
-        if stopping.is_none() && duration.is_some_and(|d| start.elapsed() >= Duration::from_secs(d))
+        if stopping.is_none()
+            && duration.is_some_and(|d| {
+                start
+                    .elapsed()
+                    .saturating_sub(Duration::from_secs(startup_delay))
+                    >= Duration::from_secs(d)
+            })
         {
             pipeline.send_event(gst::event::Eos::new());
             stopping = Some(Instant::now());
         }
         while let Some(message) = bus.pop() {
             match message.view() {
-                gst::MessageView::Eos(..) => return Ok(()),
+                gst::MessageView::Eos(..) => {
+                    if !announced {
+                        bail!("Stopped during startup; no recording to export");
+                    }
+                    return Ok(());
+                }
                 gst::MessageView::Error(err) => {
                     bail!("Capture failed: {} ({:?})", err.error(), err.debug())
                 }
@@ -284,13 +310,14 @@ async fn main() -> Result<()> {
         }
         Action::Export {
             input,
+            trim_start,
             output,
             preset,
             overwrite,
         } => {
             let p = Preset::load(&preset)?;
             check_ffmpeg()?;
-            export(&p, &input, &output, overwrite)?;
+            export(&p, &input, &output, overwrite, trim_start)?;
         }
         Action::Record {
             output,
@@ -300,6 +327,7 @@ async fn main() -> Result<()> {
             audio,
             duration,
             hide_cursor,
+            startup_delay,
             overwrite,
             test_source,
         } => {
@@ -330,6 +358,7 @@ async fn main() -> Result<()> {
                             &intermediate,
                         )?,
                         duration,
+                        startup_delay,
                     )
                     .await?;
                 } else {
@@ -367,13 +396,14 @@ async fn main() -> Result<()> {
                     let result = capture(
                         pipeline(&source, region, p.fps, audio.as_deref(), &intermediate)?,
                         duration,
+                        startup_delay,
                     )
                     .await;
                     let _ = session.close().await;
                     result?;
                 }
                 eprintln!("Exporting with preset {preset}…");
-                export(&p, &intermediate, &output, overwrite)?;
+                export(&p, &intermediate, &output, overwrite, startup_delay)?;
                 Ok(())
             }
             .await;

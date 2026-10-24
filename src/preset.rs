@@ -57,7 +57,7 @@ impl Preset {
         Ok(p)
     }
 
-    pub fn export(&self, input: &Path, output: &Path) -> Result<()> {
+    pub fn export(&self, input: &Path, output: &Path, trim_start: u64) -> Result<()> {
         let filter = format!(
             "scale=w='min(iw,{})':h='min(ih,{})':force_original_aspect_ratio=decrease:force_divisible_by=2,setsar=1,fps={}",
             self.width, self.height, self.fps
@@ -65,6 +65,9 @@ impl Preset {
         let status = Command::new("ffmpeg")
             .args(["-hide_banner", "-nostdin", "-y", "-i"])
             .arg(input)
+            // Output-side seeking decodes/discards startup frames accurately,
+            // including non-keyframes, and shifts both audio and video together.
+            .args(["-ss", &trim_start.to_string()])
             .args([
                 "-map",
                 "0:v:0",

@@ -45,6 +45,27 @@ fn rectangle_capture_exports_and_protects_output() {
             "-o",
         ])
         .arg(&output));
+    let duration = String::from_utf8(
+        run(Command::new("ffprobe")
+            .args([
+                "-v",
+                "error",
+                "-show_entries",
+                "format=duration",
+                "-of",
+                "csv=p=0",
+            ])
+            .arg(&output))
+        .stdout,
+    )
+    .unwrap()
+    .trim()
+    .parse::<f64>()
+    .unwrap();
+    assert!(
+        (duration - 1.0).abs() < 0.15,
+        "startup must not shorten --duration: {duration}"
+    );
     let info = probe(&output);
     assert!(info.contains("codec_name=h264"), "{info}");
     assert!(info.contains("width=320\nheight=180"), "{info}");
@@ -142,4 +163,65 @@ fn ctrl_c_finalizes_a_playable_recording() {
         "SIGINT was not handled: {remaining}"
     );
     assert!(probe(&output).contains("codec_name=h264"));
+}
+
+#[test]
+#[ignore = "requires FFmpeg and ffprobe"]
+fn startup_trim_removes_initial_frames_and_keeps_audio_aligned() {
+    let dir = tempfile::tempdir().unwrap();
+    let input = dir.path().join("startup.mkv");
+    let output = dir.path().join("clean.mp4");
+    run(Command::new("ffmpeg").args([
+        "-v", "error", "-f", "lavfi", "-i",
+        "color=red:s=64x64:r=30:d=1[red];color=blue:s=64x64:r=30:d=1[blue];[red][blue]concat=n=2:v=1:a=0",
+        "-f", "lavfi", "-i", "sine=frequency=440:sample_rate=48000",
+        "-t", "2", "-c:v", "ffv1", "-c:a", "pcm_s16le",
+    ]).arg(&input));
+    run(Command::new(env!("CARGO_BIN_EXE_ssr"))
+        .arg("export")
+        .arg(&input)
+        .args(["--trim-start", "1", "--preset", "twitter-30", "-o"])
+        .arg(&output));
+    let rgb = run(Command::new("ffmpeg")
+        .args(["-v", "error", "-i"])
+        .arg(&output)
+        .args([
+            "-frames:v",
+            "1",
+            "-vf",
+            "scale=1:1",
+            "-pix_fmt",
+            "rgb24",
+            "-f",
+            "rawvideo",
+            "pipe:1",
+        ]))
+    .stdout;
+    assert!(
+        rgb[2] > 200 && rgb[0] < 30,
+        "first frame must be blue, not red: {rgb:?}"
+    );
+    let info = String::from_utf8(
+        run(Command::new("ffprobe")
+            .args([
+                "-v",
+                "error",
+                "-show_entries",
+                "stream=codec_name,start_time,duration",
+                "-of",
+                "default=noprint_wrappers=1",
+            ])
+            .arg(&output))
+        .stdout,
+    )
+    .unwrap();
+    assert!(info.contains("codec_name=aac"), "{info}");
+    for line in info.lines() {
+        if let Some(value) = line.strip_prefix("start_time=") {
+            assert!(value.parse::<f64>().unwrap().abs() < 0.05, "{info}");
+        }
+        if let Some(value) = line.strip_prefix("duration=") {
+            assert!((value.parse::<f64>().unwrap() - 1.0).abs() < 0.1, "{info}");
+        }
+    }
 }
