@@ -122,10 +122,43 @@ small rectangle stays small. No padding is added. The bitrate ceiling is x264's
 VBV rate constraint, not a guarantee about every instantaneous packet or total
 file size. This tool does not enforce upload duration or file-size limits.
 
-Copy `presets/twitter.toml` to define another export configuration. All fields are
+Copy `presets/twitter.toml` to define another sharing export configuration. All fields are
 required; unknown fields and invalid values are rejected. The minimal preset
 format keeps MP4/H.264/AAC fixed and lets you configure dimensions, frame rate,
 CRF, bitrate limits, encoder speed, and audio bitrate.
+
+### Lossless video master
+
+For a silent rectangle recording at native pixel dimensions:
+
+```sh
+ssr record --region 100,200,1280,720 --preset lossless -o master.mp4
+# Also works with --window or a whole monitor.
+# Recover/re-export an existing recorder intermediate:
+ssr export .ssr-capture-XXXXXX.mkv --preset lossless --trim-start 1 -o master.mp4
+```
+
+`lossless` encodes H.264 at CRF 0, retaining the capture intermediate's 8-bit
+Y444 (4:4:4) video samples. It does not scale, round odd dimensions, resample
+frame rate or apply a VBV bitrate ceiling during export. This is lossless relative
+to the decoded captured frames **after startup trimming**, not bit-exact original
+screen RGB: capture already converts to Y444 and normalizes frame rate. Source
+frames missed during capture cannot be recovered by this preset.
+
+The preset captures at 60 fps. Copy `presets/lossless.toml` to change capture `fps`
+(1–60) or `encoder_preset`; export retains the input frame timestamps regardless
+of `fps`. Its separate `mode = "lossless"` format rejects sharing-only fields
+such as dimensions, CRF and bitrate limits rather than silently ignoring them.
+It expects the recorder's 8-bit `yuv444p` input; other pixel formats/bit depths
+are rejected instead of silently converted.
+
+Files can be substantially larger than the sharing presets and playback requires
+H.264 High 4:4:4 Predictive support. Many browser/hardware players and upload
+services do not support it; keep the master and use `ssr export master.mp4
+--preset twitter -o share.mp4` to make a compatible sharing copy. Audio is still
+off by default; if requested, it is encoded as AAC (160 kbps by default), **not
+lossless audio**. Existing `twitter`, `twitter-30` and custom sharing presets are
+unchanged.
 
 Capture integration uses [ashpd's ScreenCast portal API](https://docs.rs/ashpd/0.13.13/ashpd/desktop/screencast/index.html)
 and GStreamer's PipeWire source.

@@ -1,0 +1,7 @@
+# Lossless video relative to captured 8-bit Y444 frames, not original screen RGB.
+mode = "lossless"
+# Used during capture only; export preserves the input frame timing.
+fps = 60
+encoder_preset = "slow"
+# Audio remains AAC when requested; audio is off by default.
+audio_kbps = 160
