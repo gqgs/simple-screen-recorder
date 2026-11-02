@@ -35,7 +35,7 @@ enum Action {
         /// Rectangle X,Y,WIDTH,HEIGHT in pixels relative to the selected monitor
         #[arg(long)]
         region: Option<Region>,
-        /// Built-in name (twitter, twitter-30) or path to a TOML preset
+        /// Built-in name (twitter, twitter-30, lossless) or path to a TOML preset
         #[arg(short, long, default_value = "twitter")]
         preset: String,
         /// PulseAudio/PipeWire-Pulse source (e.g. @DEFAULT_MONITOR@ or @DEFAULT_SOURCE@)
@@ -299,7 +299,7 @@ fn pipeline(
 async fn main() -> Result<()> {
     match Cli::parse().command {
         Action::Presets => println!(
-            "twitter     MP4 / H.264 / up to 1920×1080 / 60 fps / CRF 18 / 8 Mbps / slow / AAC 160k\ntwitter-30  Same settings at 30 fps\nCustom:     --preset path/to/preset.toml"
+            "twitter     MP4 / H.264 / up to 1920×1080 / 60 fps / CRF 18 / 8 Mbps / slow / AAC 160k\ntwitter-30  Same settings at 30 fps\nlossless    MP4 / lossless H.264 4:4:4 video / native size / 60 fps capture / slow / AAC 160k\nCustom:     --preset path/to/preset.toml"
         ),
         Action::Doctor => {
             check_ffmpeg()?;
@@ -353,7 +353,7 @@ async fn main() -> Result<()> {
                         pipeline(
                             "videotestsrc is-live=true ! video/x-raw,width=640,height=360",
                             region,
-                            p.fps,
+                            p.fps(),
                             audio.as_deref(),
                             &intermediate,
                         )?,
@@ -394,7 +394,7 @@ async fn main() -> Result<()> {
                         stream.pipe_wire_node_id()
                     );
                     let result = capture(
-                        pipeline(&source, region, p.fps, audio.as_deref(), &intermediate)?,
+                        pipeline(&source, region, p.fps(), audio.as_deref(), &intermediate)?,
                         duration,
                         startup_delay,
                     )

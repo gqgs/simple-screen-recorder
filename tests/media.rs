@@ -225,3 +225,186 @@ fn startup_trim_removes_initial_frames_and_keeps_audio_aligned() {
         }
     }
 }
+
+fn decoded_frames(path: &Path, trim_start: u64) -> Vec<u8> {
+    run(Command::new("ffmpeg")
+        .args(["-v", "error", "-i"])
+        .arg(path)
+        .args([
+            "-ss",
+            &trim_start.to_string(),
+            "-map",
+            "0:v:0",
+            "-fps_mode",
+            "passthrough",
+            "-pix_fmt",
+            "+yuv444p",
+            "-f",
+            "rawvideo",
+            "pipe:1",
+        ]))
+    .stdout
+}
+
+fn frame_times(path: &Path) -> Vec<f64> {
+    String::from_utf8(
+        run(Command::new("ffprobe")
+            .args([
+                "-v",
+                "error",
+                "-select_streams",
+                "v:0",
+                "-show_entries",
+                "frame=best_effort_timestamp_time",
+                "-of",
+                "csv=p=0",
+            ])
+            .arg(path))
+        .stdout,
+    )
+    .unwrap()
+    .lines()
+    .filter_map(|line| line.split(',').next().unwrap().parse().ok())
+    .collect()
+}
+
+#[test]
+#[ignore = "requires FFmpeg and ffprobe"]
+fn lossless_export_preserves_samples_native_size_and_timing() {
+    let dir = tempfile::tempdir().unwrap();
+    // Odd sizes catch accidental 4:2:0 conversion/even rounding. The larger
+    // case also catches accidentally retaining the sharing preset's 1080p cap.
+    for size in ["321x181", "1921x1081"] {
+        let input = dir.path().join(format!("{size}.mkv"));
+        let output = dir.path().join(format!("{size}.mp4"));
+        run(Command::new("ffmpeg")
+            .args([
+                "-v",
+                "error",
+                "-f",
+                "lavfi",
+                "-i",
+                &format!("testsrc=size={size}:rate=12:duration=2,format=yuv444p"),
+                "-vf",
+                "select='not(eq(mod(n,3),1))'",
+                "-fps_mode",
+                "passthrough",
+                "-c:v",
+                "libx264",
+                "-preset",
+                "ultrafast",
+                "-qp",
+                "0",
+            ])
+            .arg(&input));
+        // The preset requests 60 fps capture; export must retain these irregular
+        // input timestamps, including when discarding the startup interval.
+        for trim in [0, 1] {
+            let result = run(Command::new(env!("CARGO_BIN_EXE_ssr"))
+                .arg("export")
+                .arg(&input)
+                .args([
+                    "--preset",
+                    "lossless",
+                    "--trim-start",
+                    &trim.to_string(),
+                    "--overwrite",
+                    "-o",
+                ])
+                .arg(&output));
+            let log = String::from_utf8_lossy(&result.stderr);
+            assert!(!log.contains("VBV"), "lossless must not use VBV: {log}");
+            let info = probe(&output);
+            assert!(info.contains("pix_fmt=yuv444p"), "{info}");
+            assert!(
+                !info.contains("codec_name=aac"),
+                "silent input must stay silent: {info}"
+            );
+            let (width, height) = size.split_once('x').unwrap();
+            assert!(
+                info.contains(&format!("width={width}\nheight={height}")),
+                "{info}"
+            );
+            let expected = decoded_frames(&input, trim);
+            assert!(!expected.is_empty());
+            assert!(
+                expected == decoded_frames(&output, 0),
+                "decoded samples differ ({size}, trim={trim})"
+            );
+            let expected_times: Vec<f64> = frame_times(&input)
+                .into_iter()
+                .filter(|t| *t >= trim as f64)
+                .map(|t| t - trim as f64)
+                .collect();
+            let actual_times = frame_times(&output);
+            assert_eq!(expected_times.len(), actual_times.len());
+            for (expected, actual) in expected_times.iter().zip(actual_times.iter()) {
+                assert!(
+                    (expected - actual).abs() < 0.001,
+                    "timing changed: {expected} -> {actual}"
+                );
+            }
+        }
+    }
+}
+
+#[test]
+#[ignore = "requires GStreamer capture plugins, FFmpeg and ffprobe"]
+fn lossless_rectangle_capture_keeps_odd_dimensions_without_audio() {
+    let dir = tempfile::tempdir().unwrap();
+    let output = dir.path().join("rectangle.mp4");
+    run(Command::new(env!("CARGO_BIN_EXE_ssr"))
+        .args([
+            "record",
+            "--test-source",
+            "--duration",
+            "1",
+            "--region",
+            "11,21,321,181",
+            "--preset",
+            "lossless",
+            "-o",
+        ])
+        .arg(&output));
+    let info = probe(&output);
+    assert!(info.contains("width=321\nheight=181"), "{info}");
+    assert!(info.contains("pix_fmt=yuv444p"), "{info}");
+    assert!(info.contains("r_frame_rate=60/1"), "{info}");
+    assert!(!info.contains("codec_name=aac"), "{info}");
+    assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 1);
+}
+
+#[test]
+#[ignore = "requires FFmpeg"]
+fn lossless_export_rejects_implicit_pixel_conversion() {
+    let dir = tempfile::tempdir().unwrap();
+    let input = dir.path().join("input.mkv");
+    let output = dir.path().join("output.mp4");
+    for format in ["yuv420p", "yuv444p10le"] {
+        run(Command::new("ffmpeg")
+            .args([
+                "-v",
+                "error",
+                "-y",
+                "-f",
+                "lavfi",
+                "-i",
+                &format!("testsrc=size=64x64:duration=0.1,format={format}"),
+                "-c:v",
+                "ffv1",
+            ])
+            .arg(&input));
+        let result = Command::new(env!("CARGO_BIN_EXE_ssr"))
+            .arg("export")
+            .arg(&input)
+            .args(["--preset", "lossless", "-o"])
+            .arg(&output)
+            .output()
+            .unwrap();
+        assert!(
+            !result.status.success(),
+            "must reject implicit conversion from {format}"
+        );
+        assert!(!output.exists(), "failed export must not publish output");
+    }
+}
