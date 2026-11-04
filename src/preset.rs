@@ -134,7 +134,9 @@ impl Preset {
                     "-fps_mode",
                     "passthrough",
                     "-enc_time_base:v",
-                    "-1",
+                    // Use the named source time base; newer FFmpeg versions
+                    // reject the legacy numeric alias (-1).
+                    "demux",
                 ]);
             }
             Self::Sharing(p) => {
